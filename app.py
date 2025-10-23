@@ -16,17 +16,17 @@ CATEGORIES = [
     "Green_Flag",
     "Siyam-siyam_Project",
     "Chop_chop_Project",
-    "Dopplelganger_Project",
+    "Doppelganger_Project",
     "Ghost_Project",
 ]
 GREEN_SET = {"Green_Flag"}
-RED_SET = {"Siyam-siyam_Project", "Chop_chop_Project", "Dopplelganger_Project", "Ghost_Project"}
+RED_SET = {"Siyam-siyam_Project", "Chop_chop_Project", "Doppelganger_Project", "Ghost_Project"}
 
 CAT_COLOR: Dict[str, List[int]] = {
     "Green_Flag": [18, 152, 66, 190],
     "Siyam-siyam_Project": [214, 139, 0, 190],
     "Chop_chop_Project":   [189, 28, 28, 190],
-    "Dopplelganger_Project":[128, 60, 170, 190],
+    "Doppelganger_Project":[128, 60, 170, 190],
     "Ghost_Project":       [32, 96, 168, 190],
 }
 MAP_INITIAL_VIEW = pdk.ViewState(latitude=12.8797, longitude=121.7740, zoom=5, pitch=0)
@@ -279,7 +279,7 @@ year_col = year_col or derived_year_col
 working = df.copy()
 
 # ---------- Tabs ----------
-tabs = st.tabs(["Overview", "Compare", "Green Flag", "Siyam-siyam", "Chop-chop", "Dopplelganger", "Ghost"])
+tabs = st.tabs(["Overview", "Compare", "Green Flag", "Siyam-siyam", "Chop-chop", "Doppelganger", "Ghost"])
 
 # ===== Overview =====
 with tabs[0]:
@@ -403,8 +403,8 @@ render_category_tab(working, "Siyam-siyam_Project", tabs[3])
 # ===== Chop-chop =====
 render_category_tab(working, "Chop_chop_Project", tabs[4])
 
-# ===== Dopplelganger =====
-render_category_tab(working, "Dopplelganger_Project", tabs[5])
+# ===== Doppelganger =====
+render_category_tab(working, "Doppelganger_Project", tabs[5])
 
 # ===== Ghost =====
 render_category_tab(working, "Ghost_Project", tabs[6])
