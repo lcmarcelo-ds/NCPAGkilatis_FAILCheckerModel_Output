@@ -1,4 +1,3 @@
-
 import re
 from typing import Optional, List, Dict
 import numpy as np
@@ -188,12 +187,7 @@ def category_metrics_per_deo(df: pd.DataFrame, deo_col: str, cost_col: Optional[
     return out.sort_values(["category_projects","category_density"], ascending=[False, False]).reset_index(drop=True)
 
 def top_entities(df: pd.DataFrame, deo_col: Optional[str], contractor_col: Optional[str], cost_col: Optional[str], by="count", topn=15):
-    """
-    Robust 'Top' aggregations. For cost mode, convert the cost column once,
-    then groupby-sum and sort. Avoid chained apply/sum/sort that can raise AttributeError.
-    """
     out = {}
-    # DEO
     if deo_col and deo_col in df.columns:
         if by == "cost" and cost_col and cost_col in df.columns:
             tmp = df.copy()
@@ -203,7 +197,6 @@ def top_entities(df: pd.DataFrame, deo_col: Optional[str], contractor_col: Optio
         else:
             s = df.groupby(deo_col, dropna=False).size().sort_values(ascending=False).head(topn)
             out["DEO"] = s.reset_index(name="Projects")
-    # Contractor
     if contractor_col and contractor_col in df.columns:
         if by == "cost" and cost_col and cost_col in df.columns:
             tmp = df.copy()
@@ -238,8 +231,98 @@ def map_layers_for_categories(df: pd.DataFrame, lat_col: str, lon_col: str, tag_
     return layers
 
 def deck_chart(layers, tooltip=None):
-    # No map_style arg to avoid AttributeError in some environments
     return pdk.Deck(initial_view_state=MAP_INITIAL_VIEW, layers=layers, tooltip=tooltip)
+
+# ---------- New helpers for stacked chart & drill-down ----------
+def _deo_tagged_other_counts(df_in: pd.DataFrame, deo_col: str, tag_col: str, category: str) -> pd.DataFrame:
+    """Return per-DEO counts for Tagged vs Other (non-tagged) in the given category."""
+    # total per DEO
+    total = df_in.groupby(deo_col, dropna=False).size().reset_index(name="TotalProjects")
+
+    # tagged per DEO for the category
+    tagged_df = df_in[df_in[tag_col].astype(str).apply(lambda s: contains_category(s, category))]
+    tagged = tagged_df.groupby(deo_col, dropna=False).size().reset_index(name="TaggedProjects")
+
+    # join & compute other
+    out = total.merge(tagged, on=deo_col, how="left")
+    out["TaggedProjects"] = out["TaggedProjects"].fillna(0).astype(int)
+    out["OtherProjects"] = (out["TotalProjects"] - out["TaggedProjects"]).astype(int)
+    return out
+
+def stacked_bar_tagged_vs_other(df_in: pd.DataFrame, deo_col: str, tag_col: str, category: str, is_green: bool = False):
+    """Altair stacked bar: Tagged vs Other per DEO."""
+    counts = _deo_tagged_other_counts(df_in, deo_col, tag_col, category)
+    # melt to long format
+    chart_df = counts.melt(
+        id_vars=[deo_col],
+        value_vars=["TaggedProjects", "OtherProjects"],
+        var_name="Status",
+        value_name="Count",
+    )
+    chart_df["Status"] = chart_df["Status"].replace({
+        "TaggedProjects": "Tagged Projects", "OtherProjects": "Other Projects"
+    })
+
+    # order DEOs by TaggedProjects desc
+    deo_order = counts.sort_values("TaggedProjects", ascending=False)[deo_col].tolist()
+
+    # color options
+    if is_green:
+        # Green for Tagged (good), red for Other
+        domain = ["Tagged Projects", "Other Projects"]
+        colors = ["#2ca02c", "#d62728"]
+    else:
+        # Red/Purple/Orange per category might differ in map; for charts keep consistent:
+        domain = ["Tagged Projects", "Other Projects"]
+        colors = ["#d62728", "#c7c7c7"]
+
+    chart = (
+        alt.Chart(chart_df)
+        .mark_bar()
+        .encode(
+            x=alt.X("Count:Q", title="Number of Projects"),
+            y=alt.Y(f"{deo_col}:N", sort=deo_order, title="District Engineering Office"),
+            color=alt.Color("Status:N", scale=alt.Scale(domain=domain, range=colors), title="Project Status"),
+            tooltip=[deo_col, "Status", "Count"]
+        )
+        .properties(height=alt.Step(20), title=f"{category} — Tagged vs Other by DEO")
+    )
+    st.altair_chart(chart, use_container_width=True)
+
+def project_detail_columns(df: pd.DataFrame) -> List[str]:
+    """Pick a useful set of columns that exist in df for the drill-down table."""
+    preferred = [
+        "Project_Category", "Category_Color",
+        "ProjectID", "ProjectDescription",
+        "TypeofWork", "infra_type",
+        "ImplementingOffice", "DistrictEngineeringOffice", "Region", "Province",
+        "Contractor",
+        "ApprovedBudgetForTheContract", "ContractCost",
+        "StartDate", "CompletionDateOriginal", "CompletionDateActual",
+        "Latitude", "Longitude"
+    ]
+    return [c for c in preferred if c in df.columns]
+
+def render_deo_drilldown(df_in: pd.DataFrame, deo_col: str, tag_col: str, category: str, title: str):
+    """Render expanders per DEO to show project lists for the category."""
+    st.subheader("Drill-down: Projects per DEO")
+    # only rows in this category
+    cat_df = filter_inclusive(df_in, tag_col, category)
+    if cat_df.empty:
+        st.info("No projects found for this category.")
+        return
+    # counts per DEO
+    counts = cat_df.groupby(deo_col, dropna=False).size().reset_index(name="Projects")
+    counts = counts.sort_values("Projects", ascending=False)
+
+    cols_to_show = project_detail_columns(df_in)
+    for _, row in counts.iterrows():
+        deo_name = row[deo_col]
+        n = int(row["Projects"])
+        label = f"{deo_name} — {n} {category} project{'s' if n != 1 else ''}"
+        with st.expander(label, expanded=False):
+            sub = cat_df[cat_df[deo_col] == deo_name]
+            st.dataframe(sub[cols_to_show] if cols_to_show else sub)
 
 # ---------- Load and prepare ----------
 try:
@@ -275,7 +358,7 @@ df = deduplicate_by_last(df, proj_col)
 df, derived_year_col = add_year_if_missing(df, year_col)
 year_col = year_col or derived_year_col
 
-# Working dataframe (you can add global filters here later if desired)
+# Working dataframe (global filters could be added here later)
 working = df.copy()
 
 # ---------- Tabs ----------
@@ -355,8 +438,9 @@ with tabs[2]:
         "green_flag_density",
         "green_flag_cost_ratio"
     ]])
-    alt_bar(gm.rename(columns={"DistrictEngineeringOffice":"DEO","green_flag_projects":"Projects"}),
-            x_col="DEO", y_col="Projects", title="Green Flag Projects by DEO", sort_col="Projects", topn=25)
+
+    st.subheader("Stacked Bar: Tagged vs Other")
+    stacked_bar_tagged_vs_other(working, deo_col, tag_col, "Green_Flag", is_green=True)
 
     st.subheader("Map")
     gdf = filter_inclusive(working.assign(Tagging=working[tag_col]), "Tagging", "Green_Flag")
@@ -371,7 +455,10 @@ with tabs[2]:
     st.subheader("Table")
     st.dataframe(filter_inclusive(working, tag_col, "Green_Flag"))
 
-# Helper to render a category tab with per-DEO metrics + map + table
+    # Drill-down per DEO (expanders)
+    render_deo_drilldown(working, deo_col, tag_col, "Green_Flag", "Green Flag")
+
+# ---------- Helper to render a category tab ----------
 def render_category_tab(df_in: pd.DataFrame, category: str, container):
     with container:
         st.header(category.replace("_"," "))
@@ -380,8 +467,9 @@ def render_category_tab(df_in: pd.DataFrame, category: str, container):
         st.subheader("Per-DEO Metrics")
         cols = ["DistrictEngineeringOffice","total_projects","category_projects","total_contract_cost",f"{category}_contract_cost","category_density","category_cost_ratio"]
         st.dataframe(cm[cols])
-        alt_bar(cm.rename(columns={"DistrictEngineeringOffice":"DEO","category_projects":"Projects"}),
-                x_col="DEO", y_col="Projects", title=f"{category} Projects by DEO", sort_col="Projects", topn=25)
+
+        st.subheader("Stacked Bar: Tagged vs Other")
+        stacked_bar_tagged_vs_other(df_in, deo_col, tag_col, category, is_green=False)
 
         st.subheader("Map")
         cdf = filter_inclusive(df_in.assign(Tagging=df_in[tag_col]), "Tagging", category)
@@ -396,6 +484,9 @@ def render_category_tab(df_in: pd.DataFrame, category: str, container):
 
         st.subheader("Table")
         st.dataframe(filter_inclusive(df_in, tag_col, category))
+
+        # Drill-down per DEO (expanders with project lists)
+        render_deo_drilldown(df_in, deo_col, tag_col, category, category)
 
 # ===== Siyam-siyam =====
 render_category_tab(working, "Siyam-siyam_Project", tabs[3])
